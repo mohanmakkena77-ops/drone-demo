@@ -1,0 +1,118 @@
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  dockerRegistryServiceConnection: 'dockerhub-connection'
+  testImageRepository: 'mohanmakkena7/test-runner'
+  testDockerfilePath: '$(Build.SourcesDirectory)/Dockerfile.test'
+  tag: '$(Build.BuildId)'
+
+stages:
+- stage: TestStage
+  displayName: Run QA Garden Tests
+  jobs:
+  - job: RunTests
+    displayName: '🧪 Run Playwright Tests'
+    pool:
+      name: 'MyLaptopPool'
+    
+    steps:
+    # 1. CLONE CODE
+    - powershell: |
+        Write-Host "📥 Cloning Sivaparvathi's Test Scripts..."
+        if (Test-Path "TeamTests") { Remove-Item -Recurse -Force "TeamTests" }
+        git clone https://github.com/sivaparvathi-coastal7/QA_Garden TeamTests
+        Write-Host "✅ Clone Complete."
+      displayName: '📥 Fetch Code from GitHub'
+
+    # 2. BUILD DOCKER
+    - task: Docker@2
+      displayName: '🔨 Build Test Environment'
+      inputs:
+        command: build
+        repository: $(testImageRepository)
+        dockerfile: $(testDockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: $(tag)
+
+    # 3. RUN TESTS (Fail-Safe Logging)
+    - powershell: |
+        Write-Host "🚀 Starting Playwright Tests..."
+        
+        # Define log file location on HOST (Windows)
+        $LogFile = "TeamTests/error_log.txt"
+        
+        # Run Docker and pipe ALL output (2>&1) to the Windows file immediately
+        # We also use PYTHONPATH=/app to fix the import error
+        docker run --rm -v "${PWD}/TeamTests:/app" -e PYTHONPATH=/app mohanmakkena7/test-runner:$(tag) /bin/bash -c "mkdir -p config && mv urls.py config/ && mv login_locators.py config/ && touch config/__init__.py && pytest -vv" 2>&1 | Tee-Object -FilePath $LogFile
+        
+        # Check if Docker failed
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "❌ Tests Failed! Logs saved to $LogFile"
+            exit 1
+        }
+      displayName: '▶️ Execute Pytest Scripts'
+
+    # 4. TRIAGE REPORTING (Generates the Exact JSON Team Wants)
+    - powershell: |
+        Write-Host "   🚨 TESTS FAILED! STARTING REPORTING   "
+        
+        # 1. Read the Log File from Host
+        if (Test-Path "TeamTests/error_log.txt") {
+            # Clean up the log to just the last 20 lines of errors
+            $RealError = Get-Content "TeamTests/error_log.txt" | Select-Object -Last 20 | Out-String
+        } else {
+            $RealError = "Log file missing. Check Step 3 output."
+        }
+
+        # 2. Create the JSON Structure (Exact Format Requested)
+        $JsonData = @{
+            build_id      = "$(Build.BuildId)"
+            timestamp     = "$(Get-Date)"
+            error_details = $RealError.Trim()
+            source_repo   = "https://github.com/sivaparvathi-coastal7/QA_Garden"
+            test_name     = "QA Garden Automated Tests"
+            status        = "FAILED"
+            labels        = @("bug", "auto-report", "playwright")
+        }
+        
+        # ---------------------------------------------------------
+        # A: SEND TO API (FASTAPI DASHBOARD)
+        # ---------------------------------------------------------
+        # ⚠️ YOUR NGROK LINK ⚠️
+        $ApiUrl = "http://192.168.1.45:8006/report-failure"
+        
+        try {
+            Invoke-RestMethod -Uri $ApiUrl -Method POST -Body ($JsonData | ConvertTo-Json -Depth 4) -ContentType "application/json"
+            Write-Host "✅ API Dashboard Updated."
+        }
+        catch {
+            Write-Host "⚠️ API Warning: Could not reach Triage Engine."
+        }
+
+        # ---------------------------------------------------------
+        # B: PUSH TO GIT REPO (TEAM TRIAGE ENGINE)
+        # ---------------------------------------------------------
+        New-Item -ItemType Directory -Force -Path TriageRepo
+        Set-Location TriageRepo
+
+        # ⚠️ PASTE YOUR WRITE-ACCESS TOKEN BELOW ⚠️
+        git clone https://PASTE_YOUR_WRITE_TOKEN_HERE@github.com/NACHICYBER08/bug-triage-engine.git .
+        
+        # Save JSON to file
+        $ReportName = "failure_report_$(Build.BuildId).json"
+        $JsonData | ConvertTo-Json -Depth 4 | Out-File $ReportName -Encoding UTF8
+        
+        git config user.email "pipeline-bot@qagarden.com"
+        git config user.name "Pipeline Bot"
+        git add .
+        git commit -m "Auto-Report: Failure in Build $(Build.BuildId)"
+        git push origin main
+        
+        Write-Host "✅ JSON Report pushed to GitHub."
+
+      displayName: '📢 Report Failure (API + Git)'
+      condition: failed()

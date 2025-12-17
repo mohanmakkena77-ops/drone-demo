@@ -1,0 +1,22 @@
+kind: pipeline
+type: docker
+name: qa-garden-tests
+
+trigger:
+  event:
+    - push
+    - pull_request
+
+steps:
+  - name: run-playwright-tests
+    # This official image comes with Python AND Browsers pre-installed.
+    # It saves huge amounts of time vs installing them manually.
+    image: mcr.microsoft.com/playwright/python:v1.49.0-jammy
+    commands:
+      - echo "Installing dependencies..."
+      - pip install -r requirements.txt
+      
+      # Run the tests (assuming you use pytest)
+      # --headless ensure it runs without a GUI
+      - echo "Starting Playwright tests..."
+      - pytest --headless
