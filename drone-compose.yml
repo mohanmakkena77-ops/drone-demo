@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  drone-server:
+    image: drone/drone:2
+    ports:
+      - 8007:80
+    volumes:
+      - drone-data:/data
+    environment:
+      - DRONE_GITHUB_CLIENT_ID=Iv23lim14p0PKK69D5QN
+      - DRONE_GITHUB_CLIENT_SECRET=${DRONE_GITHUB_CLIENT_SECRET}
+      - DRONE_RPC_SECRET=${DRONE_RPC_SECRET}
+      - DRONE_SERVER_HOST=localhost:8007
+      - DRONE_SERVER_PROTO=http
+      - DRONE_USER_CREATE=username:mohanmakkena77-ops,admin:true
+
+  drone-runner:
+    image: drone/drone-runner-docker:1
+    ports:
+      - 3000:3000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DRONE_RPC_PROTO=http
+      - DRONE_RPC_HOST=drone-server
+      - DRONE_RPC_SECRET=${DRONE_RPC_SECRET}
+      - DRONE_RUNNER_CAPACITY=2
+    depends_on:
+      - drone-server
+
+volumes:
+  drone-data:
